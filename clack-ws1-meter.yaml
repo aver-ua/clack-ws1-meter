@@ -1,0 +1,414 @@
+esphome:
+  name: ecosoft-softener
+  comment: "${device_description}"
+  friendly_name: Ecosoft Water Softener
+  on_boot:
+    priority: 200
+    then:
+      - script.execute: on_boot
+
+substitutions:
+  device_description: "Ecosoft Clack WS1 meter + ultrasonic saltlevel sensor"
+  device_name: "ecosoft-softener"
+  watermeter_pin: "17" # watermeter relay pin
+  regeneration_pin: "18" # regeneration relay pin
+  us_trigger_pin: "25" # ultrasonic sensor trigger pin 
+  us_echo_pin: "26" # ultrasonic sensor echo pin
+  tank_height: "50" # salt tank height in cm
+  sensor_height: "12" # sensor distance in cm
+  timezone: "Europe/Kiev" # timezone
+  watermeter_update_interval: 600s
+  saltlevel_update_interval: 1h
+
+time:
+  - platform: sntp
+    id: clack_sntp_time
+    timezone: ${timezone}
+
+esp32:
+  board: esp32dev
+  framework:
+    type: arduino
+
+# Enable logging
+logger:
+
+ota:
+  platform: esphome
+  password: !secret ota_password
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+
+  # Enable fallback hotspot (captive portal) in case wifi connection fails
+  ap:
+    ssid: "Ecosoft-Water-Softener"
+    password: !secret ap_password
+
+captive_portal:
+
+# Enable Home Assistant API
+# meterstand_clack: service to set global var totalWaterUsage
+# meterstand_clack_reg_date: service to set global var regeneration_last
+api:
+  encryption:
+    key: !secret api_encryption_key
+  services:
+    - service: meterstand_clack
+      variables:
+        meter_value: float
+      then:
+        - globals.set:
+            id: totalWaterUsage
+            value: !lambda "return ( meter_value ) ;"
+        - sensor.template.publish:
+            id: clack_watermeter
+            state: !lambda |-
+              return id(totalWaterUsage);
+        - sensor.template.publish:
+            id: clack_m3_left
+            state: !lambda |-
+              return float(id(clack_capacity_liters).state - id(clack_watermeter).state) * 0.001;
+        - sensor.template.publish:
+            id: clack_l_left
+            state: !lambda |-
+              return int(id(clack_capacity_liters).state - id(clack_watermeter).state);
+    - service: meterstand_clack_reg_date
+      variables:
+        meter_value: string
+      then:
+        - globals.set:
+            id: regeneration_last
+            value: !lambda "return meter_value ;"
+
+# Define a global variable for total water usage
+globals:
+  - id: totalWaterUsage
+    type: float
+    restore_value: yes
+    initial_value: '00'
+
+# Define a global variable for last regeneration time
+  - id: regeneration_last
+    type: std::string
+    restore_value: yes
+    initial_value: '"Never"'
+
+script:
+###  On reboot or powerloss of the esp, set the time left, last regeneration time, and capacity counters
+  - id: on_boot
+    then:
+      - sensor.template.publish:
+          id: clack_m3_left
+          state: !lambda |-
+            return float(id(clack_capacity_liters).state - id(clack_watermeter).state) * 0.001;
+      - sensor.template.publish:
+          id: clack_l_left
+          state: !lambda |-
+            return int(id(clack_capacity_liters).state - id(clack_watermeter).state);
+      - text_sensor.template.publish:
+            id: clack_regeneration_last
+            state: !lambda |-
+              return id(regeneration_last);
+
+text_sensor:
+  # Expose last regeneration information as sensor 
+  - platform: template
+    name: Regenerated on
+    id: clack_regeneration_last
+    icon: mdi:clock-start
+    update_interval: never
+    lambda: |-
+      return id(regeneration_last);
+
+  # Expose WiFi information as sensors.
+  - platform: wifi_info
+    ip_address:
+      name: IP
+    ssid:
+      name: SSID
+  
+  # Uptime Human Readable
+  - platform: template
+    name: Uptime HR
+    id: uptime_human
+    icon: mdi:clock-start
+     
+  # Fill salt sensor based on salt_level_prc
+  - platform: template
+    id: salt_level_fill_salt
+    name: "Fill Salt"
+    update_interval: ${saltlevel_update_interval}
+    lambda: |-
+      if (id(salt_level_prc).state<id(clack_salt_warn_prc).state) { return {"Yes"}; } else { return {"No"}; } 
+  
+  # Time to Regeneration
+  - platform: template
+    id: time_to_regeneration
+    name: "Time 2 Regeneration"
+    update_interval: 30min
+    lambda: |-
+      if (id(regeneration_last)=="Never") return { "" };
+      time_t currTime = id(clack_sntp_time).now().timestamp;
+      struct tm * tm_currTime = localtime(&currTime);
+      int year = tm_currTime->tm_year+1900;
+      struct tm tm_reg_last;
+      if (strlen(id(regeneration_last).c_str())>16) 
+       strptime(id(regeneration_last).c_str(),"%Y %a %d %b %H:%M",&tm_reg_last);
+      else 
+       strptime((to_string(year)+" "+id(regeneration_last).substr(4,12)).c_str(),"%Y %d %b %H:%M",&tm_reg_last);
+      if (id(clack_l_left).state<=0) {
+        tm_reg_last.tm_mday=tm_currTime->tm_mday;
+        tm_reg_last.tm_mon=tm_currTime->tm_mon;
+      } else { tm_reg_last.tm_mday += id(clack_capacity_days).state; }
+      tm_reg_last.tm_sec = 0;
+      int time = mktime(&tm_reg_last) - currTime;
+      if ( (id(clack_l_left).state<=0)&&(time<0) ) time += 86400;
+      int days = time / 86400;
+      int hours = time % 86400 / 3600;
+      return {
+                ((days>0) ? to_string(days) + "d " : "") +
+                ((hours>0) ? to_string(hours) + "h " : "")
+              };
+      
+# Exposed switches.
+# Switch to restart the salt_level_sensor.   
+switch:
+  - platform: restart
+    name: Restart
+
+number:
+  # Set capacity liters
+  - platform: template
+    id: clack_capacity_liters
+    name: Capacity in liters
+    icon: mdi:water-opacity
+    optimistic: true
+    mode: slider
+    step: 50
+    entity_category: config
+    min_value: 0
+    max_value: 7200
+    initial_value: 2800
+    restore_value: yes
+    unit_of_measurement: L
+    on_value:
+      then:
+        - sensor.template.publish:
+            id: clack_watermeter
+            state: !lambda |-
+              return id(totalWaterUsage);
+        - sensor.template.publish:
+            id: clack_m3_left
+            state: !lambda |-
+              return float(id(clack_capacity_liters).state - id(clack_watermeter).state) * 0.001;
+        - sensor.template.publish:
+            id: clack_l_left
+            state: !lambda |-
+              return int(id(clack_capacity_liters).state - id(clack_watermeter).state);
+
+  # Set capacity days
+  - platform: template
+    id: clack_capacity_days
+    name: Capacity in days
+    icon: mdi:calendar-clock
+    optimistic: true
+    mode: slider
+    step: 1
+    entity_category: config
+    min_value: 0
+    max_value: 21
+    initial_value: 10
+    restore_value: yes
+    unit_of_measurement: days
+
+  # Set pulse liters
+  - platform: template
+    id: clack_pulse_liters
+    name: Water liters pulse
+    icon: mdi:water-plus
+    optimistic: true
+    mode: slider
+    step: 1
+    entity_category: config
+    min_value: 0
+    max_value: 100
+    initial_value: 10
+    restore_value: yes
+    unit_of_measurement: L
+
+  # Set warning percent
+  - platform: template
+    id: clack_salt_warn_prc
+    name: Salt warning percent
+    icon: mdi:water-percent-alert
+    optimistic: true
+    mode: slider
+    step: 5
+    entity_category: config
+    min_value: 5
+    max_value: 100
+    initial_value: 20
+    restore_value: yes
+    unit_of_measurement: "%"
+
+sensor:
+  # Uptime sensor.
+  - platform: uptime
+    name: Uptime
+    entity_category: "diagnostic"
+    id: esp_uptime
+    update_interval: 60s
+    on_raw_value:
+      then:
+        - text_sensor.template.publish:
+            id: uptime_human
+            state: !lambda |-
+              int seconds = round(id(esp_uptime).raw_state);
+              int days = seconds / (24 * 3600);
+              seconds = seconds % (24 * 3600);
+              int hours = seconds / 3600;
+              seconds = seconds % 3600;
+              int minutes = seconds /  60;
+              seconds = seconds % 60;
+              return (
+                (days ? String(days) + "d " : "") +
+                (hours ? String(hours) + "h " : "") +
+                (minutes ? String(minutes) + "m " : "") +
+                (String(seconds) + "s")
+              ).c_str();   
+
+  # WiFi Signal sensor.
+  - platform: wifi_signal
+    name: "WiFi Signal dB"
+    id: wifi_signal_db
+    entity_category: "diagnostic"
+    update_interval: 60s
+  - platform: copy # Reports the WiFi signal strength in %
+    source_id: wifi_signal_db
+    name: "WiFi Signal Percent"
+    filters:
+        - lambda: return min(max(2 * (x + 100.0), 0.0), 100.0);
+    unit_of_measurement: "%"
+    entity_category: "diagnostic"
+
+  #  Watermeter
+  - platform: template
+    id: clack_watermeter
+    name: Water meter
+    icon: mdi:water
+    update_interval: ${watermeter_update_interval}
+    unit_of_measurement: L
+    device_class: water
+    state_class: total_increasing
+    accuracy_decimals: 1
+    lambda: |-
+      return id(totalWaterUsage);
+
+  - platform: template
+    id: clack_m3_left
+    name: Water softener m3 left
+    unit_of_measurement: m³
+    device_class: water
+    accuracy_decimals: 2
+    update_interval: ${watermeter_update_interval}
+
+  - platform: template
+    id: clack_l_left
+    name: Water softener ltr left
+    unit_of_measurement: L
+    device_class: water
+    accuracy_decimals: 0
+    update_interval: ${watermeter_update_interval}
+
+  # Saltlevel sensor  
+  - platform: ultrasonic
+    trigger_pin: 
+      number: ${us_trigger_pin}
+    echo_pin: 
+      number: ${us_echo_pin}
+    name: "Saltlevel cm"
+    id: salt_level
+    update_interval: ${saltlevel_update_interval}
+    filters:
+    # sensor works in meters
+    - lambda: return ${tank_height}+${sensor_height}-x*100;
+    unit_of_measurement: "cm"
+  - platform: copy
+    source_id: salt_level
+    id: salt_level_prc
+    name: "Saltlevel percent"
+    unit_of_measurement: "%"
+    filters:
+      - lambda: return x/${tank_height}*100;
+
+## watermeter pulse / relay 1
+binary_sensor:
+  - platform: gpio
+    pin:
+      number: ${watermeter_pin}
+      inverted: true
+      mode:
+        input: true
+        pullup: true
+    id: clack_watermeter_pulse
+    name: Watermeter pulse
+    filters:
+      - delayed_on_off: 50ms
+    on_press:
+      then:
+        - sensor.template.publish:
+            id: clack_watermeter
+            state: !lambda |-
+              return id(totalWaterUsage) += id(clack_pulse_liters).state;
+        - sensor.template.publish:
+            id: clack_m3_left
+            state: !lambda |-
+              return float(id(clack_capacity_liters).state - id(clack_watermeter).state) * 0.001;
+        - sensor.template.publish:
+            id: clack_l_left
+            state: !lambda |-
+              return int(id(clack_capacity_liters).state - id(clack_watermeter).state);
+
+  ## regeneration pulse / relay 2
+  - platform: gpio
+    pin:
+      number: ${regeneration_pin}
+      inverted: true
+      mode:
+        input: true
+        pullup: true
+    id: clack_regeneration_pulse
+    name: Regeneration pulse
+    filters:
+      - delayed_on_off: 800ms
+    on_press:
+      then:
+        - globals.set:
+            id: totalWaterUsage
+            value: '00'
+        - text_sensor.template.publish:
+            id: clack_regeneration_last
+            state: !lambda |-
+              char str[32];
+              time_t currTime = id(clack_sntp_time).now().timestamp;
+              strftime(str, sizeof(str), "%Y %a %d %b %H:%M", localtime(&currTime));
+              id(regeneration_last) = str;
+              return  { str };
+        - sensor.template.publish:
+            id: clack_watermeter
+            state: !lambda |-
+              return id(totalWaterUsage);
+        - sensor.template.publish:
+            id: clack_m3_left
+            state: !lambda |-
+              return float(id(clack_capacity_liters).state - id(clack_watermeter).state) * 0.001;
+        - sensor.template.publish:
+            id: clack_l_left
+            state: !lambda |-
+              return int(id(clack_capacity_liters).state - id(clack_watermeter).state);
+
+# Enable Web server.
+web_server:
+  port: 80
