@@ -2,6 +2,7 @@
 This project forked from https://github.com/fonske/clack-reader 
 
 ESPHome config to monitor Clack WS1 Control Valve used in water softeners and purification systems. 
+
 In my case it is a purification system from Ecosoft (Ukraine). 
 
 ## Set up Clack WS1 "RELAY 1 / RLY 1", "RELAY 2 / RLY 2"
