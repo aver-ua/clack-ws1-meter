@@ -81,6 +81,13 @@ api:
         - globals.set:
             id: regeneration_last
             value: !lambda "return meter_value ;"
+    - service: meterstand_clack_mnt_date
+      variables:
+        meter_value: string
+      then:
+        - globals.set:
+            id: maintenance_last
+            value: !lambda "return meter_value ;"
 
 # Define a global variable for total water usage
 globals:
@@ -91,6 +98,12 @@ globals:
 
 # Define a global variable for last regeneration time
   - id: regeneration_last
+    type: std::string
+    restore_value: yes
+    initial_value: '"Never"'
+
+# Define a global variable for last maintenance time
+  - id: maintenance_last
     type: std::string
     restore_value: yes
     initial_value: '"Never"'
@@ -111,6 +124,10 @@ script:
             id: clack_regeneration_last
             state: !lambda |-
               return id(regeneration_last);
+      - text_sensor.template.publish:
+            id: clack_maintenance_last
+            state: !lambda |-
+              return id(maintenance_last);
 
 text_sensor:
   # Expose last regeneration information as sensor 
@@ -122,12 +139,23 @@ text_sensor:
     lambda: |-
       return id(regeneration_last);
 
+  # Expose last maintenance information as sensor 
+  - platform: template
+    name: Maintenance Last
+    id: clack_maintenance_last
+    icon: mdi:wrench-clock
+    update_interval: never
+    lambda: |-
+      return id(maintenance_last);
+
   # Expose WiFi information as sensors.
   - platform: wifi_info
     ip_address:
       name: IP
+      icon: mdi:ip-network
     ssid:
       name: SSID
+      icon: mdi:router-wireless
   
   # Uptime Human Readable
   - platform: template
@@ -138,6 +166,7 @@ text_sensor:
   # Fill salt sensor based on salt_level_prc
   - platform: template
     id: salt_level_fill_salt
+    icon: mdi:basket-fill
     name: "Fill Salt"
     update_interval: ${saltlevel_update_interval}
     lambda: |-
@@ -146,6 +175,7 @@ text_sensor:
   # Time to Regeneration
   - platform: template
     id: time_to_regeneration
+    icon: mdi:calendar-clock-outline
     name: "Time 2 Regeneration"
     update_interval: 30min
     lambda: |-
@@ -171,7 +201,29 @@ text_sensor:
                 ((days>0) ? to_string(days) + "d " : "") +
                 ((hours>0) ? to_string(hours) + "h " : "")
               };
-      
+
+  # Time to Maintenance
+  - platform: template
+    id: time_to_maintenance
+    icon: mdi:calendar-clock-outline
+    name: "Time 2 Maintenance"
+    update_interval: 12h
+    lambda: |-
+      if (id(maintenance_last)=="Never") return { "" };
+      time_t currTime = id(clack_sntp_time).now().timestamp;
+      struct tm * tm_currTime = localtime(&currTime);
+      struct tm tm_mnt_last;
+      strptime(id(maintenance_last).c_str(),"%Y %a %d %b",&tm_mnt_last);
+      tm_mnt_last.tm_mday += id(clack_maintenance_days).state;
+      tm_mnt_last.tm_sec = 0;
+      tm_mnt_last.tm_min = 0;
+      tm_mnt_last.tm_hour = 0;
+      int time = mktime(&tm_mnt_last) - currTime;      
+      int days = time / 86400;
+      if (days==0) return { "Today" };
+      if (days>id(clack_maintenance_days).state) return { "?" };
+      return { to_string(days) + "d" };
+
 # Exposed switches.
 # Switch to restart the salt_level_sensor.   
 switch:
@@ -253,6 +305,21 @@ number:
     restore_value: yes
     unit_of_measurement: "%"
 
+  # Set Maintenance period
+  - platform: template
+    id: clack_maintenance_days
+    name: Maintenance period
+    icon: mdi:tools
+    optimistic: true
+    mode: slider
+    step: 1
+    entity_category: config
+    min_value: 0
+    max_value: 365
+    initial_value: 180
+    restore_value: yes
+    unit_of_measurement: days
+
 sensor:
   # Uptime sensor.
   - platform: uptime
@@ -292,6 +359,7 @@ sensor:
         - lambda: return min(max(2 * (x + 100.0), 0.0), 100.0);
     unit_of_measurement: "%"
     entity_category: "diagnostic"
+    device_class: ""
 
   #  Watermeter
   - platform: template
@@ -311,12 +379,14 @@ sensor:
     name: Water softener m3 left
     unit_of_measurement: m³
     device_class: water
+    state_class: total
     accuracy_decimals: 2
     update_interval: ${watermeter_update_interval}
 
   - platform: template
     id: clack_l_left
     name: Water softener ltr left
+    state_class: total
     unit_of_measurement: L
     device_class: water
     accuracy_decimals: 0
@@ -408,6 +478,21 @@ binary_sensor:
             id: clack_l_left
             state: !lambda |-
               return int(id(clack_capacity_liters).state - id(clack_watermeter).state);
+
+button:
+  - platform: template
+    name: "Maintenance Done"
+    icon: mdi:wrench-check
+    on_press:
+      then:
+        - text_sensor.template.publish:
+            id: clack_maintenance_last
+            state: !lambda |-
+              char str[32];
+              time_t currTime = id(clack_sntp_time).now().timestamp;
+              strftime(str, sizeof(str), "%Y %a %d %b", localtime(&currTime));
+              id(maintenance_last) = str;
+              return  { str };
 
 # Enable Web server.
 web_server:
