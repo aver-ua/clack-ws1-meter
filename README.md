@@ -29,7 +29,7 @@ Buttons: `NEXT` - next step | `REGEN` - previous step | `ARROWS` - change value
 
 ## Schematic
 [Clack WS1 PCB Relay terminal block](/images/ws1-pcb.png) has 3 outs (VCC is central). Output voltage 15-17V, so, a step-down DC-DC modules is required. Then you must use also two 12V or 5V relay modules connected to each DC-DC module out. Relays connected to GPIO19 (watermeter pulse), GPIO18 (regeneration pulse) of ESP32.  
-You can also use solid state relays like this: [HY-M285 (Omron g3mb-202p 24vdc)](https://www.aliexpress.com/item/1005005364510250.html). In this case you don't need to use DC-DC modules.   
+You can also use solid state relays like this: [HY-M285 (OMRON G3MB-202P **24VDC**)](https://www.aliexpress.com/item/1005005364510250.html). In this case you don't need to use DC-DC modules.   
 
 Ultrasonic sensor HC-SR04 (to measure the salt level) connected to GPIO25 (trigger) and GPIO26 (echo). The sensor is [placed under the lid of the salt tank](/images/HC-SR04.jpg).  
 [Schematic diagram of connections](/images/Schematic_clack-ws1-meter.png)  
