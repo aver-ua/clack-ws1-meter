@@ -28,7 +28,8 @@ Buttons: `NEXT` - next step | `REGEN` - previous step | `ARROWS` - change value
     c.	Set time: 0.01 min
 
 ## Schematic
-[Clack WS1 PCB Relay terminal block](/images/ws1-pcb.png) has 3 outs (GND is central). Output voltage 15-17V, so, a step-down DC-DC modules is required. Then you must use also two 12V or 5V relay modules connected to each DC-DC module out. Relays connected to GPIO19 (watermeter pulse), GPIO18 (regeneration pulse) of ESP32. 
+[Clack WS1 PCB Relay terminal block](/images/ws1-pcb.png) has 3 outs (VCC is central). Output voltage 15-17V, so, a step-down DC-DC modules is required. Then you must use also two 12V or 5V relay modules connected to each DC-DC module out. Relays connected to GPIO19 (watermeter pulse), GPIO18 (regeneration pulse) of ESP32.  
+
 Ultrasonic sensor HC-SR04 (to measure the salt level) connected to GPIO25 (trigger) and GPIO26 (echo). The sensor is [placed under the lid of the salt tank](/images/HC-SR04.jpg).  
 [Schematic diagram of connections](/images/Schematic_clack-ws1-meter.png)  
 [Board Example](/images/board_example.jpg)  
